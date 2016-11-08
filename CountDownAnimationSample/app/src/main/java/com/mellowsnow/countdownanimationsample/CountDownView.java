@@ -1,13 +1,19 @@
 package com.mellowsnow.countdownanimationsample;
 
 import android.animation.ValueAnimator;
+import android.annotation.TargetApi;
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.SoundPool;
+import android.os.Build;
 import android.util.AttributeSet;
-import android.util.Log;
+import android.util.TypedValue;
 import android.view.View;
 
 /**
@@ -18,39 +24,49 @@ public class CountDownView extends View {
 
     private ValueAnimator mAnimator;
     private final Paint mPaint;
-    private RectF mRect;
-    private RectF mRect2;
+    private RectF mRectF;
+    private Rect mRect = new Rect();
 
+    // Arc Width
+    private int mStrokeWidth;
+    private final static int CIRCLE_STROKE_WIDTH = 1;
+    // Text Size
+    private int mTextSizePx;
+    private final static int TEXT_SIZE_DP = 70;
+    // Animation Start Angle
+    private static final int mAngleTarget = 270;
+    // Diff inner/outer circle radius
+    private int mDiffCircleRaidusPx;
+    private static final int DIFF_CIRCLE_RADIUS_DP = 10;
+    // Initial Angle
+    private float mAngle = 20;
+    // Count Number
+    private String mCountNumber = 4 + "";
 
-    // Arcの幅
-    private final int strokeWidth = 100;
-    // Animation 開始地点をセット
-    private static final int AngleTarget = 270;
-    // 初期 Angle
-    private float angle = 10;
-    // 半径
-    private float radius;
-    private float radius2;
+    private AudioAttributes mAudioAttributes;
+    private SoundPool mSoundPool;
+    private int mSoundOne;
 
-    private Canvas mCanvas;
-
-    private boolean mInit;
+    private final static int COUNT_IN_DURATION = 4000;
 
     public CountDownView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        mInit = true;
+
+        // set initial values
         mPaint = new Paint();
         mPaint.setAntiAlias(true);
-        mPaint.setStrokeWidth(10);
-        // Arcの色
-        //mPaint.setColor(Color.argb(255, 0, 0, 255));
-        // Arcの範囲
-        mRect = new RectF();
-        mRect2 = new RectF();
+        mRectF = new RectF();
+        mStrokeWidth = dpToPx(CIRCLE_STROKE_WIDTH, getResources());
+        mTextSizePx = dpToPx(TEXT_SIZE_DP, getResources());
+        mDiffCircleRaidusPx = dpToPx(DIFF_CIRCLE_RADIUS_DP, getResources());
 
-        mAnimator = ValueAnimator.ofFloat(0.f, 240.0f);
-        // アニメーションの時間(4秒)を設定する
-        mAnimator.setDuration(4000);
+        // set soundpool
+        mSoundPool = buildSoundPool(1);
+        mSoundOne = mSoundPool.load(context, R.raw.tick, 1);
+
+        // start animation
+        mAnimator = ValueAnimator.ofFloat(0.f, 0.f);
+        mAnimator.setDuration(COUNT_IN_DURATION);
         mAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
             @Override
             public void onAnimationUpdate(ValueAnimator animation) {
@@ -65,79 +81,103 @@ public class CountDownView extends View {
         // Canvas 中心点
         float x = canvas.getWidth()/2;
         float y = canvas.getHeight()/2;
-        radius = canvas.getWidth()/4;
-        radius2 = canvas.getWidth()/10;
+        float radius = canvas.getWidth()/4;
+        float radiusArc = radius/2;
 
-        mCanvas = canvas;
+        // draw background
+        canvas.drawARGB(200, 0, 0, 0);
 
-        mCanvas.drawARGB(255, 0, 0, 0);
-
-        float time = (Float) (mAnimator.getAnimatedValue());
-        angle = getAngleAndClearCanvas(time);
-
-        // 円弧の領域設定
-        mRect.set(x - radius2, y - radius2, x + radius2, y + radius2);
-
-        // 円弧の描画
+        // draw arc
+        long time = (long) mAnimator.getCurrentPlayTime();
+        mAngle = getAngleAndClearCanvas(time);
+        mRectF.set(x - radiusArc, y - radiusArc, x + radiusArc, y + radiusArc);
         mPaint.setStyle(Paint.Style.STROKE);
+        mPaint.setStrokeWidth(radius);
+        mPaint.setARGB(200, 255, 255, 255);
+        canvas.drawArc(mRectF, mAngleTarget, mAngle, false, mPaint);
 
-        mPaint.setStrokeWidth(300);
-        mPaint.setARGB(100, 255, 255, 255);
-        mCanvas.drawArc(mRect, AngleTarget, angle, false, mPaint);
-
-        // 四角
-        //mRect.offset(200, 0);
-        //mCanvas.drawRoundRect(mRect, 30, 30, mPaint);
-
-        // 円弧の領域設定
-        mPaint.setStyle(Paint.Style.STROKE);
-
-        mPaint.setStrokeWidth(1);
+        // draw outer/inner circle
+        mPaint.setStrokeWidth(mStrokeWidth);
         mPaint.setARGB(255, 255, 255, 255);
-        mCanvas.drawCircle(x, y, radius + 100, mPaint);
-        mInit = false;
+        canvas.drawCircle(x, y, radius + mDiffCircleRaidusPx, mPaint);
+        canvas.drawCircle(x, y, radius, mPaint);
 
-        // 円弧の領域設定
-        mPaint.setStyle(Paint.Style.STROKE);
-        mPaint.setStrokeWidth(1);
-        mPaint.setARGB(255, 255, 255, 255);
-        mCanvas.drawCircle(x, y, radius, mPaint);
-        mInit = false;
+        // draw number
+        mPaint.setARGB(255, 221, 49, 110);
+        mPaint.setTextSize(mTextSizePx);
+        mPaint.setStyle(Paint.Style.FILL);
+        drawCenter(canvas, mPaint , mCountNumber);
     }
 
-    private int mLastPart = 0;
-    private float getAngleAndClearCanvas(float time) {
-        if (time <= 60)  {
+    private int mLastPart = -1;
+    private float getAngleAndClearCanvas(long time) {
+        if (time <= COUNT_IN_DURATION/4)  {
+            mCountNumber = 4 + "";
+            if (mLastPart == -1) playTick();
             mLastPart = 0;
-        } else if (time <= 120) {
-            time -= 360;
-            if (mLastPart != 1) {
-                Log.d("draw", "clear canvas 1 : " + time);
-                clearCanvas();
-            }
+        } else if (time <= COUNT_IN_DURATION/4*2) {
+            time -= COUNT_IN_DURATION/4;
+            mCountNumber = 3 + "";
+            if (mLastPart == 0) playTick();
             mLastPart = 1;
-        } else if (time <= 180) {
-            time -= 120;
-            if (mLastPart != 2) {
-                Log.d("draw", "clear canvas 2 : " + time);
-                clearCanvas();
-            }
+        } else if (time <= COUNT_IN_DURATION/4*3) {
+            time -= COUNT_IN_DURATION/4*2;
+            mCountNumber = 2 + "";
+            if (mLastPart == 1) playTick();
             mLastPart = 2;
-        } else if (time <= 240) {
-            time -= 180;
-            if (mLastPart != 3) {
-                Log.d("draw", "clear canvas 3 : " + time);
-                clearCanvas();
-            }
+        } else if (time <= COUNT_IN_DURATION) {
+            time -= COUNT_IN_DURATION/4*3;
+            mCountNumber = 1 + "";
+            if (mLastPart == 2) playTick();
             mLastPart = 3;
         }
-        return time * 6.0f;
+        return 360 * time / (COUNT_IN_DURATION/4);
     }
 
-    private void clearCanvas() {
-        mPaint.setColor(Color.TRANSPARENT);
-        mCanvas.drawArc(mRect, AngleTarget, 360, false, mPaint);
-        mPaint.setColor(Color.BLACK);
-        mInit = true;
+    private void playTick() {
+        // play(ID, left volume, right volume, priority, loop count, play speed)
+        mSoundPool.play(mSoundOne, 1.0f, 1.0f, 2, 0, 1);
     }
+
+    /**
+     * Convert Dp to Pixel
+     */
+    public static int dpToPx(float dp, Resources resources) {
+        float px = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, resources.getDisplayMetrics());
+        return (int) px;
+    }
+
+    private void drawCenter(Canvas canvas, Paint paint, String text) {
+        canvas.getClipBounds(mRect);
+        float cHeight = mRect.height();
+        float cWidth = mRect.width();
+        paint.setTextAlign(Paint.Align.LEFT);
+        paint.getTextBounds(text, 0, text.length(), mRect);
+        float x = cWidth / 2f - mRect.width() / 2f - mRect.left;
+        float y = cHeight / 2f + mRect.height() / 2f - mRect.bottom;
+        canvas.drawText(text, x, y, paint);
+    }
+
+    @SuppressWarnings("deprecation")
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    private SoundPool buildSoundPool(int poolMax)
+    {
+        SoundPool pool = null;
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            pool = new SoundPool(poolMax, AudioManager.STREAM_MUSIC, 0);
+        }
+        else {
+            AudioAttributes attr = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build();
+            pool = new SoundPool.Builder()
+                    .setAudioAttributes(attr)
+                    .setMaxStreams(poolMax)
+                    .build();
+        }
+        return pool;
+    }
+
 }
